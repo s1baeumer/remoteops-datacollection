@@ -1,0 +1,28 @@
+version: "1.1"
+os: windows
+packname: TestCompliancePack
+queries: 
+  - name: GetLocalAdministrators
+    description: "Local admin accounts"
+    query: "SELECT username, groupname, type, u.UID, g.GID, Description, comment FROM users u JOIN user_groups ug ON ug.UID = u.UID JOIN groups g ON g.GID = ug.GID WHERE g.GROUPNAME = 'Administrators' AND u.type = 'local';"
+    type: violation
+  - name: ServicesInstalledLast30days
+    description: "Persistence through Windows Services installed within the Past 30 days"
+    query: "select datetime, eventid, json_extract(windows_eventlog.data,'$.EventData.ServiceName') as 'ServiceName', json_extract(windows_eventlog.data,'$.EventData.ImagePath') as 'ImagePath', json_extract(windows_eventlog.data,'$.EventData.StartType') as 'StartType', json_extract(windows_eventlog.data,'$.EventData.AccountName') as 'AccountName', json_extract(windows_eventlog.data,'$.EventData.ServiceType') as 'ServiceType', data from windows_eventlog where channel = 'System' and (eventid ='7045') and datetime > datetime('now', '-30 day');"
+    type: violation
+  - name: WindowsArtifactsOfExecutionForEvidenceOfAFile
+    description: "Search windows artifacts of execution for evidence of a file"
+    query: "select f.path,ua.path as ua_path,shim.path as shim_path,bam.path as bam_path, datetime(shim.modified_time,'unixepoch') AS shim_file_last_modified_time, datetime(bam.last_execution_time,'unixepoch') AS bam_file_last_execution_time, datetime(ua.last_execution_time,'unixepoch') AS ua_file_last_execution_time, datetime(f.mtime,'unixepoch') AS filesystem_last_modified_time, datetime(f.btime,'unixepoch') AS filesystem_created_time, ROUND((f.size * 10e-7),4) AS size_megabytes FROM background_activities_moderator as bam LEFT JOIN userassist as ua  using (path) LEFT JOIN shimcache as shim using (path) LEFT JOIN file as f using (path) WHERE (shim.path like '%excel.exe' OR bam.path like '%excel.exe' OR ua.path like '%evil.exe' OR (f.directory IN ('c:\\windows\\prefetch\\','c:\\windows\\','c:\\programdata\\','c:\\') and f.filename like 'excel.exe%')) UNION select f.path,ua.path as ua_path,shim.path as shim_path,bam.path as bam_path, datetime(shim.modified_time,'unixepoch') AS shim_file_last_modified_time, datetime(bam.last_execution_time,'unixepoch') AS bam_file_last_execution_time, datetime(ua.last_execution_time,'unixepoch') AS ua_file_last_execution_time, datetime(f.mtime,'unixepoch') AS filesystem_last_modified_time, datetime(f.btime,'unixepoch') AS filesystem_created_time, ROUND((f.size * 10e-7),4) AS size_megabytes FROM userassist as ua LEFT JOIN background_activities_moderator as bam using (path) LEFT JOIN shimcache as shim using (path) LEFT JOIN file as f using (path) WHERE (shim.path like '%excel.exe' OR bam.path like '%excel.exe' OR ua.path like '%evil.exe' OR (f.directory IN ('c:\\windows\\prefetch\\','c:\\windows\\','c:\\programdata\\','c:\\') and f.filename like 'excel.exe%')) UNION select f.path,ua.path as ua_path,shim.path as shim_path,bam.path as bam_path, datetime(shim.modified_time,'unixepoch') AS shim_file_last_modified_time, datetime(bam.last_execution_time,'unixepoch') AS bam_file_last_execution_time, datetime(ua.last_execution_time,'unixepoch') AS ua_file_last_execution_time, datetime(f.mtime,'unixepoch') AS filesystem_last_modified_time, datetime(f.btime,'unixepoch') AS filesystem_created_time, ROUND((f.size * 10e-7),4) AS size_megabytes FROM shimcache as shim LEFT JOIN background_activities_moderator as bam using (path) LEFT JOIN userassist as ua using (path) LEFT JOIN file as f using (path) WHERE (shim.path like '%excel.exe' OR bam.path like '%evil.exe' OR ua.path like '%excel.exe' OR (f.directory IN ('c:\\windows\\prefetch\\','c:\\windows\\','c:\vprogramdata\\','c:\\') and f.filename like 'excel.exe%')) UNION select f.path,ua.path as ua_path,shim.path as shim_path,bam.path as bam_path, datetime(shim.modified_time,'unixepoch') AS shim_file_last_modified_time, datetime(bam.last_execution_time,'unixepoch') AS bam_file_last_execution_time, datetime(ua.last_execution_time,'unixepoch') AS ua_file_last_execution_time, datetime(f.mtime,'unixepoch') AS filesystem_last_modified_time, datetime(f.btime,'unixepoch') AS filesystem_created_time, ROUND((f.size * 10e-7),4) AS size_megabytes FROM file as f LEFT JOIN background_activities_moderator as bam using (path) LEFT JOIN userassist as ua using (path) LEFT JOIN shimcache as shim using (path) WHERE (f.directory IN ('c:\\windows\\prefetch\\','c:\\windows\\','c:\\programdata\\','c:\\') and f.filename like 'excel.exe%');"
+    type: violation
+  - name: WSLEnabled
+    description: "Endpoints with Windows Subsystem for Linux enabled"
+    query:  "SELECT * FROM windows_optional_features WHERE name = 'Microsoft-Windows-Subsystem-Linux' AND state = 1"
+    type: violation
+  - name: UnencryptedBitlockerPartitions
+    description: "Endpoints with unencrypted Bitlocker partitions"
+    query:  "SELECT * FROM bitlocker_info WHERE protection_status=0;"
+    type: violation
+  - name: SecureBootDisabled
+    description: "Endpoints with disabled SecureBoot (UEFI)"
+    query:  "SELECT * from secureboot WHERE secure_boot!=1;"
+    type: violation
