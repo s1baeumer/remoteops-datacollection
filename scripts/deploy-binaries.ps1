@@ -1,178 +1,164 @@
-# DEPLOY (FORENSIC BINARIES) FROM GITHUB REPO
-# This script allows to download the binaries from a Github Repo
+# QUERY FOR INFORMATION ON THE ENDPOINT USING OSQUERY
+# This script queries data from an endpoint using osquery by using querypacks downloaded 
+# from a Github repo and sends the output to Skylight 
 #
 # AUTHOR  : Andreas Baeumer (andreasb@sentinelone.com)
 # VERSION : 1.2 
 # USAGE   : 
-# deploy-binaries.ps1 (optional parameters) 
+# deploy-osquery-skylight.ps1 (optional parameters) 
 # 
 # Optional parameters are defined below
 # 
 # ERROR CODES
 # 0   - no error occured
 # 1   - unspecified error occured
-# 5   - directory to store the packages could not be created
-# 6   - directory to store the packages could not be deleted
+# 15  - could not locate the osqueryi.exe binary
 #
 # TODO 
-# LOGGING TO XDR
-# CONNECTIVITY CHECK / PROXY
-# SET FOLDER ACL for LocalAdmin DomainUser
+# Output to File
+# adding session id, additional identifiers to JSON 
+# 
+# {
+#    "dataSource.category" : "security",
+#    "dataSource.vendor" : "RemoteOps",
+#    "dataSource.name" : "osquery"
+#    "site.id"
+# }
+#
 
 
-param (
-    # SETTING OPTIONAL PARAMETERS TO CONTROL THE SCRIPT
-    [Parameter(Mandatory=$false)]               # skipping the version check of binaries to remove and download fresh versions 
-    [Boolean]$skipVersionCheck=$False,
-    [Parameter(Mandatory=$false)]               # Path to where the binaries should be stored
-    [String]$StorageLocation="C:\ProgramData\SentinelOne",
-    [Parameter(Mandatory=$false)]               # URL of repo where the binaries are stored
-    [String]$REPO_URL="https://github.com/s1baeumer/remoteops-datacollection/blob/main/binaries/",
-    [Parameter(Mandatory=$false)]               # URL of file where the versions are stored
-    [String]$VERSION_URL="https://raw.githubusercontent.com/s1baeumer/remoteops-datacollection/main/binaries/versions",
-    [Parameter(Mandatory=$false)]               # remove all files in directory
-    [Boolean]$Remove=$False,
-    [Parameter(Mandatory=$false)]               # Enable/Disable debug logging
+
+
+Param(
+    [parameter(Mandatory = $False)]      # name of the query pack as base64-encoded blob
+    [String]$pack_name="WindowsData",
+    [parameter(Mandatory = $False)]     # URL to download the query pack as base64-encoded blob
+    [String]$pack_url="https://raw.githubusercontent.com/s1baeumer/remoteops-datacollection/main/query-packs/base64/",
+    [Parameter(Mandatory=$False)]       # path where osqueryi.exe is stored
+#    [String]$StorageLocation="C:\Temp\osqueryi.exe",
+    [String]$StorageLocation="C:\ProgramData\SentinelOne\osqueryi.exe",
+    [Parameter(Mandatory=$False)]       # path where output from osquery is stored
+#    [String]$OutputLocation="C:\ProgramData\SentinelOne\output.json",
+    [String]$OutputLocation="C:\Temp\output.json",
+    [Parameter(Mandatory=$False)]       # Enable/Disable debug logging
     [Boolean]$DebugLogging=$True
 )
-
 
 # LOGGING 
 function Logging($msg) {
     if ($DebugLogging -eq $True) {
         $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
         $LogMessage = "$stamp $msg"
-#        Add-content  "$StorageLocation\log.txt" -value $LogMessage
-        Add-content  "C:\Temp\deploy-binaries-log.txt" -value $LogMessage
+        Add-content  "C:\Temp\execute-osquery-skylight.txt" -value $LogMessage
     }
 }
 
-# Set ACL for folder 
-function SetFolderACL () {
-    Logging "Trying to set ACL for folder $StorageLocation"
+## help functions 
+
+# FINDING AGENT ID 
+function getagentid{
+    $baseInstalledPath = "C:\Program Files\SentinelOne"
+    $agent_install_dir = Get-ChildItem $baseInstalledPath -ErrorAction SilentlyContinue | ?{ $_.PSIsContainer } | Select FullName,Name
+    if (!$agent_install_dir) { exit 1 }
+    $sentinelctl = "$($agent_install_dir.FullName)\SentinelCtl.exe"
+    # Get the agent uuid
+    $agent_uuid = & $sentinelctl agent_id
+    Logging "Found agent id '$agent_uuid'"
+    return $agent_uuid
+}
+
+# EXECUTE OSQUERY
+function ExecuteOsquery($base64_sql) {
+    $SQL = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($base64_sql))
+    Logging "SQL: $SQL"
     try {
-        $Acl = Get-Acl $StorageLocation
-        # Disable Permission Inheritance
-        $Acl.SetAccessRuleProtection($true,$false)
-        
-        # Set permissions to RemoteOps user (owner) 
-        $Ar = New-Object System.Security.AccessControl.FileSystemAccessRule($un, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
-        $Acl.SetAccessRule($Ar)
-        Set-Acl $StorageLocation $Acl
-        Logging "successfully set folder permissions"
-        return $True
-    } catch {
-        Logging "could not set folder permissions"
-        Logging $_.Exception.Message
+        $output = &$StorageLocation --json $SQL 
+        Logging "OSQUERY EXECUTET"
+        return $output
+    }
+    catch {
+        Logging "could not execute the query '$SQL' exiting"
         return $False
     }
 }
 
 
-# MAIN SCRIPT START
-Logging "########## STARTING SCRIPT ##########"
-$un = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-Logging "Trying to download versions file from repo"
-Logging "Running script as user: $un"
-Logging "Current Directory: $StorageLocation"
-
-
-# Check if custom path is set through script parameters
-#if ((Test-Path $StorageLocation) -eq "") {
-#    $StorageLocation = (Get-Location).Path        
-#    Logging "No custom path is set - will set to default: $StorageLocation"
-#}
-
-
-
-if ($Remove -eq $True) {
-    Logging "Remove all files and folders from $StorageLocation"
-    try {
-        Remove-Item -LiteralPath $StorageLocation -Force -Recurse
-    } catch {
-        Logging $_.Exception.Message
-        exit(6)
-    }
+# CHECKING IF OSQUERY EXISTS ON THE ENDPOINT
+if(Test-Path $StorageLocation) {
+    Logging "osquery binary is found"  
 } else {
-    # Verify that directory Structure exists before downloading the binaries
-    try {
-        if ((Test-Path "$StorageLocation") -ne $True) {
-            Logging "Path $StorageLocation not existing"  
-            Logging "trying to create directory $StorageLocation"  
-            $c = New-Item -Path $StorageLocation -ItemType Directory
-            SetFolderACL
-        } else {
-            Logging "Path exists - no action taken"
-        }
-    }
-    catch {
-        Logging "Could not create the directory structure to store the binaries"
-        Logging $_.Exception.Message
-        exit(5)
-    }
-
-    # DOWNLOAD VERSION FILE
-    try{
-        if ((Test-Path "$StorageLocation\versions.txt") -eq $True) {
-            Remove-Item "$StorageLocation\versions.txt"
-        }
-        Invoke-WebRequest -Uri $VERSION_URL -OutFile "$StorageLocation\versions.txt"
-        $arrayFromFile = Get-Content -Path "$StorageLocation\versions.txt"
-
-        foreach ($data in $arrayFromFile) {
-            $d = $data -split '='
-            $bin = $d[0]
-            $hash = $d[1]
-            $ver = $d[2]
-            $path = $StorageLocation+'\'+$bin
-            $repo = $REPO_URL+$bin+"?raw=true"
-            if ($skipVersionCheck -ne $True) {
-                if ((Test-Path $path) -eq $True) {
-                    $chash = (Get-FileHash $path -Algorithm SHA1).hash
-                } else {
-                    $chash = ""
-                } 
-                if ($hash -ne $chash) {
-                    Logging $hash" vs. "$chash
-                    Logging "Version mismatch or file not existing - trying to download the correct binary from repo"
-                    try {
-                        Logging "Removing binary $bin before new download"
-                        if ((Test-Path $path) -eq $True) {
-                            Logging "Remove file $path"
-                            Remove-Item $path
-                        }
-                        Logging "Download new binary $bin"
-                        Invoke-WebRequest -Uri $repo  -OutFile $path
-                    } 
-                    catch {
-                        Logging "couldn't download $bin from repo" 
-                        Logging $_.Exception.Message
-
-                    }
-                    finally {
-                        Logging "finished download of $bin from $REPO_URL "
-                    }
-                } else {
-                    Logging $path" - hash matches - no download necessary "
-                }
-            } else {
-                Logging "Removing binary $bin before new download"
-                if ((Test-Path $path) -eq $True) {
-                    Logging "Remove file $path"
-                    Remove-Item $path
-                }
-                Logging "Download new binary from $REPO_URL$bin?raw=true"
-                Invoke-WebRequest -Uri $repo -OutFile $path
-            }
-        }
-    }
-    catch {
-        Logging "something went terribly wrong"
-        Logging $_.Exception.Message
-        exit(1)
-    }
-    finally{
-        Logging "########## FINISHED SCRIPT ##########"
-        exit(0)
-    }
+    Logging "Could not find osquery binary in '$StorageLocation'"
+    exit(15)
 }
+
+#### START CODE ####
+
+
+Logging "========================================================================"
+Logging "Starting Script"
+Logging "========================================================================"
+Logging ""
+Logging "COLLECTING HOSTINFO"
+
+## COLLECTING HOSTNAME AND AGENT ID
+$agent_name = (Get-CimInstance -ClassName Win32_ComputerSystem).Name
+Logging "AgentName: $agent_name"
+#$agent_id = getagentid
+
+$purl = "$pack_url$pack_name.b64"
+Logging "Building pack url: $purl"
+
+
+
+# QUERY FOR PACK FROM QUERY PACK URL
+Logging "START DOWNLOAD QUERYPACK"
+Logging "FROM PACK URL: $purl"
+
+# Ensures that Invoke-WebRequest uses TLS 1.2
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# SEND REQUEST TO DOWLOAD QUERYPACK
+#TODO download blob from remote server
+Logging "started download from $purl"
+$query_pack_blob = Invoke-WebRequest -Uri $purl -UseBasicParsing
+# CONVERT BLOB TO JSON
+Logging "downloaded string - try to decode"
+$q = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($query_pack_blob)) | ConvertFrom-Json
+
+# START LOOPING THROUGH QUERIES FROM QUERYPACK 
+$bj = New-Object System.Collections.ArrayList
+foreach($item in $q.queries) {
+    # RUNNING SINGLE QUERY 
+    $output = ExecuteOsquery ([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($item.query)))
+    if ($output -ne $False) {
+        # SPLITTING RESULT BY LINEBREAK AND FILL IN ARRAY
+        $x = $output -replace "`n",", " -replace "`r",", " | ConvertFrom-Json
+ 
+        $result = New-Object System.Collections.ArrayList
+        # LOOPING THROUGH OUTPUT ARRAY AND ADD CONTENT TO ARRAY
+        foreach ($r in $x) {
+            $result.Add($r)
+        }
+    } else {
+        $result = New-Object System.Collections.ArrayList
+        $result.Add($_.Exception.Message)
+        $result.Add("COULD NOT PERFORM QUERY")
+    }
+    $res = @{}
+    # ADD META DATA TO JSON
+    $res.Add("name",$item.name)
+    $res.Add("description",$item.description)
+    $res.Add("type",$item.type)
+    $res.Add("query",$item.query)
+    $res.Add("data",$result)
+    $bj.Add($res)
+}
+
+Logging "Trying to save the collected data to json file"
+$bj | ConvertTo-Json -Depth 4 | Out-File $OutputLocation
+
+
+
+Logging "========================================================================"
+Logging "Finished script"
+Logging "========================================================================"
+
