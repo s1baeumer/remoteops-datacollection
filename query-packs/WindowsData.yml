@@ -1,6 +1,6 @@
 version: "1.1"
 os: windows
-packname: GatherData
+packname: WindowsData
 queries:
   - name: GetAllServices
     description: "list all services"
