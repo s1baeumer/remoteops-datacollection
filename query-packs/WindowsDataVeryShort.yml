@@ -1,0 +1,14 @@
+version: '1.1'
+os: windows
+packname: WindowsDataVeryShort
+queries:
+  -
+    name: GetARPCache
+    description: 'list all arp cache entries'
+    query: 'SELECT * from arp_cache;'
+    type: data
+  -
+    name: GetAllUsers
+    description: 'list all users'
+    query: 'SELECT * from users;'
+    type: data
