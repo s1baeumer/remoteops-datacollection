@@ -1,6 +1,6 @@
 version: '1.1'
 os: windows
-packname: WindowsDataShort
+packname: WindowsData
 queries:
   -
     name: GetARPCache
@@ -21,11 +21,6 @@ queries:
     name: GetBitlockerStatus
     description: 'Retrieve bitlocker status of the machine'
     query: 'SELECT * from bitlocker_info;'
-    type: data
-  -
-    name: GetAllCertificates
-    description: 'list all certificates from endpoint'
-    query: 'SELECT * from certificates;'
     type: data
   -
     name: GetCPUINfo
