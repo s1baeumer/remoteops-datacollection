@@ -15,23 +15,16 @@
 # 15  - could not locate the osqueryi.exe binary
 #
 # TODO 
-# Output to File
-# adding session id, additional identifiers to JSON 
-# 
-# {
-#    "dataSource.category" : "security",
-#    "dataSource.vendor" : "RemoteOps",
-#    "dataSource.name" : "osquery"
-#    "site.id"
-# }
 #
 
 
-
-
 Param(
+    [parameter(Mandatory = $False)]      # skylight write token
+    [String]$skylight_token="0g00729oG9viluG0C86eLFzJv/q3SQPo6mOgQE4gMfxQ-",
     [parameter(Mandatory = $False)]      # name of the query pack as base64-encoded blob
     [String]$pack_name="WindowsData",
+    [parameter(Mandatory = $False)]     # skylight region eu|us 
+    [String]$skylight_region="eu",
     [parameter(Mandatory = $False)]     # URL to download the query pack as base64-encoded blob
     [String]$pack_url="https://raw.githubusercontent.com/s1baeumer/remoteops-datacollection/main/query-packs/base64/",
     [Parameter(Mandatory=$False)]       # path where osqueryi.exe is stored
@@ -43,6 +36,232 @@ Param(
     [Parameter(Mandatory=$False)]       # Enable/Disable debug logging
     [Boolean]$DebugLogging=$True
 )
+
+
+if (Get-Module LogToDataSet) {Remove-Module LogToDataSet}
+New-Module -Name 'LogToDataSet' -ScriptBlock {
+
+    $dataset_region = "us";
+    
+    $logtodataset_source = @"     
+    using System.Collections;
+    using System.Collections.Generic;
+    using System.IO;
+    using System.Text;
+
+    public class DataSetEvent {        
+        public string ts;     // timestamp in nanoseconds as string
+        public int sev; //// 0-6 - "finest, finer, fine, info, warning, error, fatal"
+        public Hashtable attrs; // // event attributes
+
+        public DataSetEvent() {                
+            this.ts = (System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()*1000000).ToString();// // Get nanosecond time
+            this.sev = 3;// // set default severity 3
+            this.attrs = new Hashtable();
+            this.attrs.Add("logfile", "");
+            this.attrs.Add("parser", "json");
+        }
+
+        public void SetEventAttributes(Hashtable attributes) {
+            this.attrs = attributes;
+        }
+
+        public void AddEventAttribute(string key, string value) {
+            if (this.attrs.ContainsKey(key)) {
+                this.attrs.Remove(key);
+            }
+            this.attrs.Add(key, value);
+        }
+    }
+
+    public class DataSetLog {
+        public string token;
+        public string session;
+        public Hashtable sessionInfo;
+        public System.Collections.Generic.List<DataSetEvent> events;
+        
+        public DataSetLog()
+        {
+            this.session = System.Guid.NewGuid().ToString();
+            this.sessionInfo = new Hashtable();
+            this.sessionInfo.Add("serverHost", "");
+            this.events = new System.Collections.Generic.List<DataSetEvent>();        
+        }
+
+        public DataSetLog(string token = null) 
+        {
+            this.token = token;
+        }    
+
+        public void SetToken(string token) {
+            this.token = token;
+        }
+    }
+
+    public class LogToDataSet {
+        public string datasetus = "https://xdr.us1.sentinelone.net/api/addEvents";    
+        public string dataseteu = "https://xdr.eu1.sentinelone.net/api/addEvents";    
+        public string dataseturl = "";
+        public DataSetLog session;
+        public string global_Event_Logfile; // logfile to apply to all events added
+        public Hashtable global_Event_Attrs; // event attributes to apply to all events added    
+        public System.Collections.Generic.Queue<DataSetEvent> EventQueue;  // event queue 
+        public long lastTs ; // store last event timestamp, each event added must have a timestamp > previous
+        public int MaxEvents; // max events in session before sending
+
+        public LogToDataSet(string token, string url = "us", int MaxEvents = 1000) {
+            this.session = new DataSetLog();
+            this.lastTs = 0;        
+            this.session.token = token;    
+            this.MaxEvents = MaxEvents;    
+            this.EventQueue = new System.Collections.Generic.Queue<DataSetEvent>(); 
+            switch (url.ToLower()) {
+                case "us":
+                    this.dataseturl = this.datasetus;
+                    break;
+                case "eu":
+                    this.dataseturl = this.dataseteu;      
+                    break;      
+                default:
+                    this.dataseturl = url;
+                    break;
+            }        
+        }   
+
+        public void SetToken(string token) {
+            this.session.SetToken(token);
+        }
+
+        public void SetSessionAttributes(Hashtable attributes) {
+            this.session.sessionInfo = attributes;
+        }
+        
+        public void AddSessionAttribute(string key, string value) {
+            if (this.session.sessionInfo.ContainsKey(key)) {
+                this.session.sessionInfo.Remove(key);
+            }
+            this.session.sessionInfo.Add(key, value);
+        }
+
+        public void SetServerHost(string serverHost) {
+            this.AddSessionAttribute("serverHost", serverHost) ;       
+        }
+
+        public void AddSessionAttributes<T>(T attrs) {} //replace in powershell
+        public void AddEventObject(DataSetEvent sevent) {} //replace in powershell
+        public void AddEvent(object aevent) {} //replace in powershell
+        public void FlushEvents() {} //replace in powershell
+    }
+"@
+        
+    Add-Type -TypeDefinition $logtodataset_source
+    $log2dataset = New-Object LogToDataSet("", $dataset_region)
+
+    Add-Member -InputObject $log2dataset -MemberType ScriptMethod -Name "AddEventObject" -Force -Value {
+        param([DataSetEvent]$addevent)
+        
+        $eventts = [int64]$addevent.ts
+        if ($eventts -le $this.lastTs) {
+            $eventts +=1
+            $addevent.ts = [string]$eventts            
+            $this.lastTs = $eventts
+        } else {
+            $this.lastTs = $eventts
+        }        
+        if ($this.global_Event_Attrs.Count -ne 0) {
+            foreach ($attr in $this.global_Event_Attrs.Keys) {
+                $addevent.AddEventAttribute($attr, $this.global_Event_Attrs[$attr])
+            }
+        }
+        if ($this.global_Event_Logfile -ne "") {
+            $addevent.AddEventAttribute("logfile", $this.global_Event_Logfile)            
+        }            
+        
+        $this.EventQueue.Enqueue($addevent)                    
+        
+        if ($this.EventQueue.Count -ge $this.MaxEvents) {
+            $this.FlushEvents()
+        }                
+    }
+    
+    Add-Member -InputObject $log2dataset -MemberType ScriptMethod -Name "AddEvent" -Force -Value {
+        param($message)
+    
+        $emessage = ""
+        if ($message.GetType().Name -eq "string") {
+            $emessage = $message
+        }
+        else {
+            $emessage = ($message | ConvertTo-Json -Compress)
+        }
+        [DataSetEvent]$newevent = New-Object DataSetEvent
+        $newevent.AddEventAttribute("message", $emessage)
+        $this.AddEventObject($newevent)       
+    }
+
+    Add-Member -InputObject $log2dataset -MemberType ScriptMethod -Name "AddSessionAttributes" -Force -Value {
+        param($attrs)
+
+        if ($attrs) {
+            if ($attrs.GetType().Name -eq 'String[]') {
+                try {
+                        $attrs = ConvertFrom-StringData -StringData ($attrs -join "`n") -ErrorVariable ConvErr
+                }
+                catch {Write-Host "Error Converting Session Attributes"}                      
+                }     
+                if ($attrs -and $attrs.GetType().Name -eq 'Hashtable') {
+                    $attrs.GetEnumerator() | ForEach-Object {
+                        $this.AddSessionAttribute($_.Key, $_.Value)
+                }       
+            }            
+        }    
+    }
+
+    Add-Member -InputObject $log2dataset -MemberType ScriptMethod -Name "SetGlobal_LogFile" -Force -Value {
+        param($logfile)
+
+        $this.global_Event_Logfile = $logfile
+    }
+
+    Add-Member -InputObject $log2dataset -MemberType ScriptMethod -Name "SetGlobal_EventAttrs" -Force -Value {
+        param($attrs)
+
+        $this.global_Event_Attrs = $attrs
+    }
+
+    Add-Member -InputObject $log2dataset -MemberType ScriptMethod -Name "FlushEvents" -Force -Value {   
+        while ($this.EventQueue.Count -ne 0) {
+            for ($i = 0; $i -lt $this.MaxEvents; $i++) {
+                if ($this.EventQueue.Count -ne 0) {
+                    $this.session.events.Add($this.EventQueue.Dequeue())
+                }                    
+            }
+            try{
+                $body = ($this.session | ConvertTo-Json -Compress -Depth 100) 
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12          
+                $response = Invoke-RestMethod -Uri $this.dataseturl -Method 'Post' -Body $body -ContentType 'application/json'
+                if ($response.status -eq 'success') {                        
+                    $this.session.events.Clear()    
+                } else {
+                    Write-Error "Error Sending To DataSet: Status: $($response.status) - Message: $($response.message)"            
+                }  
+            } 
+            catch {
+                Write-Host "nix gedd $($Error) "
+                Write-Error "Error Sending To DataSet - $($Error)"
+            }
+        }        
+    } 
+
+    
+    function Get-DataSetLogger($token) {        
+        $log2dataset.SetToken($token)
+        return $log2dataset # Initialize DataSet Logger
+    }
+    
+    Export-ModuleMember -Function Get-DataSetLogger  
+} | Import-Module
+
 
 # LOGGING 
 function Logging($msg) {
@@ -57,14 +276,19 @@ function Logging($msg) {
 
 # FINDING AGENT ID 
 function getagentid{
-    $baseInstalledPath = "C:\Program Files\SentinelOne"
-    $agent_install_dir = Get-ChildItem $baseInstalledPath -ErrorAction SilentlyContinue | ?{ $_.PSIsContainer } | Select FullName,Name
-    if (!$agent_install_dir) { exit 1 }
-    $sentinelctl = "$($agent_install_dir.FullName)\SentinelCtl.exe"
-    # Get the agent uuid
-    $agent_uuid = & $sentinelctl agent_id
-    Logging "Found agent id '$agent_uuid'"
-    return $agent_uuid
+    $installpath = dir -Path "C:\Program Files\SentinelOne" -Filter SentinelCtl.exe -Recurse
+    $installfolder = $installpath.Directory.FullName
+    $sentinelctl = $installpath.FullName
+
+    try {
+        $agent_uuid = &"$sentinelctl" agent_id
+        Logging "Found agent id '$agent_uuid'"
+        return $agent_uuid
+    } catch {
+        Logging "could not retrieve agent uuid"
+        Logging $_.Exception.Message
+    } 
+    exit(1)
 }
 
 # EXECUTE OSQUERY
@@ -78,85 +302,90 @@ function ExecuteOsquery($base64_sql) {
     }
     catch {
         Logging "could not execute the query '$SQL' exiting"
-        return "ERROR IN QUERY"
+        return $False
     }
 }
 
 
 # CHECKING IF OSQUERY EXISTS ON THE ENDPOINT
-try {
-    Test-Path $StorageLocation
+if(Test-Path $StorageLocation) {
     Logging "osquery binary is found"  
-} catch {
+} else {
     Logging "Could not find osquery binary in '$StorageLocation'"
     exit(15)
 }
 
 #### START CODE ####
+function runfunc() {
+    Logging "========================================================================"
+    Logging "Starting Script"
+    Logging "========================================================================"
+    Logging ""
+    Logging "COLLECTING HOSTINFO"
+
+    ## COLLECTING HOSTNAME AND AGENT ID
+    $agent_name = (Get-CimInstance -ClassName Win32_ComputerSystem).Name
+    Logging "AgentName: $agent_name"
+    $agent_uuid = getagentid
+
+    $purl = "$pack_url$pack_name.b64"
+    Logging "Building pack url: $purl"
+
+    # INSTANTIATE SkylightLogger
+    $dataset = Get-DatasetLogger($skylight_token) 
+    $dataset.SetServerHost("RemoteOps-osquery")
+    $dataset.AddSessionAttribute("endpoint.name", $agent_name)
+    $dataset.AddSessionAttribute("agent.uuid", $agent_uuid)
 
 
-Logging "========================================================================"
-Logging "Starting Script"
-Logging "========================================================================"
-Logging ""
-Logging "COLLECTING HOSTINFO"
+    # QUERY FOR PACK FROM QUERY PACK URL
+    Logging "START DOWNLOAD QUERYPACK"
+    Logging "FROM PACK URL: $purl"
 
-## COLLECTING HOSTNAME AND AGENT ID
-$agent_name = (Get-CimInstance -ClassName Win32_ComputerSystem).Name
-Logging "AgentName: $agent_name"
-#$agent_id = getagentid
+    # Ensures that Invoke-WebRequest uses TLS 1.2
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    # SEND REQUEST TO DOWLOAD QUERYPACK
+    #TODO download blob from remote server
+    Logging "started download from $purl"
+    $query_pack_blob = Invoke-WebRequest -Uri $purl -UseBasicParsing
+    # CONVERT BLOB TO JSON
+    Logging "downloaded string - try to decode"
+    $q = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($query_pack_blob)) | ConvertFrom-Json
 
-$purl = "$pack_url$pack_name.b64"
-Logging "Building pack url: $purl"
+    foreach($item in $q.queries) {
+        $dataset.SetGlobal_LogFile($item.name) 
 
-
-
-# QUERY FOR PACK FROM QUERY PACK URL
-Logging "START DOWNLOAD QUERYPACK"
-Logging "FROM PACK URL: $purl"
-
-# Ensures that Invoke-WebRequest uses TLS 1.2
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-# SEND REQUEST TO DOWLOAD QUERYPACK
-#TODO download blob from remote server
-Logging "started download from $purl"
-$query_pack_blob = Invoke-WebRequest -Uri $purl -UseBasicParsing
-# CONVERT BLOB TO JSON
-Logging "downloaded string - try to decode"
-$q = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($query_pack_blob)) | ConvertFrom-Json
-
-# START LOOPING THROUGH QUERIES FROM QUERYPACK 
-$bj = New-Object System.Collections.ArrayList
-foreach($item in $q.queries) {
-    # RUNNING SINGLE QUERY 
-    $output = ExecuteOsquery ([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($item.query)))
-    # SPLITTING RESULT BY LINEBREAK AND FILL IN ARRAY
-    $x = $output -replace "`n",", " -replace "`r",", " | ConvertFrom-Json
+        # RUNNING SINGLE QUERY 
+        $output = ExecuteOsquery ([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($item.query)))
+        if ($output -ne $False) {
+            # SPLITTING RESULT BY LINEBREAK AND FILL IN ARRAY
+            $x = $output -replace "`n",", " -replace "`r",", " | ConvertFrom-Json
  
-    $result = New-Object System.Collections.ArrayList
-    # LOOPING THROUGH OUTPUT ARRAY AND ADD CONTENT TO ARRAY
-    foreach ($r in $x) {
-        # REMOVE FIRST AND LAST BRACKET
-        #if ($r -ne "[" -and $r -ne "]") {
-            $result.Add($r)
-        #}
+            # LOOPING THROUGH OUTPUT ARRAY AND ADD CONTENT TO ARRAY
+            foreach ($r in $x) {
+                $element = New-Object DatasetEvent
+                $element.ts = $([DateTimeOffset]::Now.ToUnixTimeMilliseconds())*1000000 
+                $element.attrs.Add("osquery.name", $item.name)
+                $element.attrs.Add("osquery.description", $item.description)
+                $element.attrs.Add("osquery.type", $item.type)
+                $element.attrs.Add("osquery.query", $item.query)
+                $r.PSObject.Properties | ForEach-Object {
+                    try {
+                        $element.attrs.Add($_.name,$_.value)
+                    } catch {
+                        Write-Host "Kölsch gefunden? $($Error)"
+                        exit(1)
+                    }
+                }
+                $dataset.AddEventObject($element)
+                $dataset.FlushEvents()  
+            }
+        }
     }
-    $res = @{}
-    $res.Add("name",$item.name)
-    $res.Add("description",$item.description)
-    $res.Add("type",$item.type)
-    $res.Add("query",$item.query)
-    $res.Add("data",$result)
-    $bj.Add($res)
-    break
+
+    Logging "========================================================================"
+    Logging "Finished script"
+    Logging "========================================================================"
 }
 
-Logging "Trying to save the collected data to json file"
-$bj | ConvertTo-Json -Depth 4 | Out-File $OutputLocation
-
-
-
-Logging "========================================================================"
-Logging "Finished script"
-Logging "========================================================================"
-
+runfunc @Args
