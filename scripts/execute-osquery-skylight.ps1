@@ -28,13 +28,9 @@ Param(
     [parameter(Mandatory = $False)]     # URL to download the query pack as base64-encoded blob
     [String]$pack_url="https://raw.githubusercontent.com/s1baeumer/remoteops-datacollection/main/query-packs/base64/",
     [Parameter(Mandatory=$False)]       # path where osqueryi.exe is stored
-    [String]$StorageLocation="C:\Temp\osqueryi.exe",
-#    [String]$StorageLocation="C:\ProgramData\SentinelOne\osqueryi.exe",
-    [Parameter(Mandatory=$False)]       # path where output from osquery is stored
-#    [String]$OutputLocation="C:\ProgramData\SentinelOne\output.json",
-    [String]$OutputLocation="C:\Temp\output.json",
+    [String]$StorageLocation="C:\ProgramData\SentinelOne\osqueryi.exe",
     [Parameter(Mandatory=$False)]       # Enable/Disable debug logging
-    [Boolean]$DebugLogging=$True
+    [Boolean]$DebugLogging=$False
 )
 
 
@@ -294,14 +290,15 @@ function getagentid{
 # EXECUTE OSQUERY
 function ExecuteOsquery($base64_sql) {
     $SQL = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($base64_sql))
-    Logging "SQL: $SQL"
+    $q = "`"$StorageLocation`" --json `'$SQL`'"
     try {
-        $output = &$StorageLocation --json $SQL 
-        Logging "OSQUERY EXECUTET"
+        $output = Invoke-Expression "& $q"
+        Logging $q
         return $output
     }
     catch {
         Logging "could not execute the query '$SQL' exiting"
+        Logging $_.Exception.Message
         return $False
     }
 }
@@ -348,13 +345,12 @@ function runfunc() {
     #TODO download blob from remote server
     Logging "started download from $purl"
     $query_pack_blob = Invoke-WebRequest -Uri $purl -UseBasicParsing
+    #Logging $query_pack_blob
     # CONVERT BLOB TO JSON
     Logging "downloaded string - try to decode"
     $q = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($query_pack_blob)) | ConvertFrom-Json
 
     foreach($item in $q.queries) {
-        $dataset.SetGlobal_LogFile($item.name) 
-
         # RUNNING SINGLE QUERY 
         $output = ExecuteOsquery ([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($item.query)))
         if ($output -ne $False) {
@@ -373,7 +369,7 @@ function runfunc() {
                     try {
                         $element.attrs.Add($_.name,$_.value)
                     } catch {
-                        Write-Host "Kölsch gefunden? $($Error)"
+                        Logging "Kölsch gefunden? $($Error)"
                         exit(1)
                     }
                 }
