@@ -1,48 +1,59 @@
-version: "1.1"
+version: '1.1'
 os: windows
 packname: WindowsData
 queries:
-  - name: GetAllServices
-    description: "list all services"
-    query: "SELECT * from services;"
+  -
+    name: GetARPCache
+    description: 'list all arp cache entries'
+    query: 'SELECT * from arp_cache;'
     type: data
-  - name: GetAllProcesses
-    description: "list all processes "
-    query: "SELECT * from processes;"
+  -
+    name: GetAllProcesses
+    description: 'list all processes '
+    query: 'SELECT * from processes;'
     type: data
-  - name: GetAllUsers
-    description: "list all users"
-    query: "SELECT * from users;"
+  -
+    name: GetAllUsers
+    description: 'list all users'
+    query: 'SELECT * from users;'
     type: data
-  - name: GetBitlockerStatus
-    description: "Retrieve bitlocker status of the machine"
-    query: "SELECT * from bitlocker_info;"
+  -
+    name: GetBitlockerStatus
+    description: 'Retrieve bitlocker status of the machine'
+    query: 'SELECT * from bitlocker_info;'
     type: data
-  - name: GetAllCertificates
-    description: "list all certificates from endpoint"
-    query: "SELECT * from certificates;"
+  -
+    name: GetAllCertificates
+    description: 'list all certificates from endpoint'
+    query: 'SELECT * from certificates;'
     type: data
-  - name: GetCPUINfo
-    description: "Retrieve cpu hardware info of the machine"
-    query: "SELECT * from cpu_info;"
+  -
+    name: GetCPUINfo
+    description: 'Retrieve cpu hardware info of the machine'
+    query: 'SELECT * from cpu_info;'
     type: data
-  - name: GetConnectivity
-    description: "Provides the overall system's network state"
-    query: "SELECT * from connectivity;"
+  -
+    name: GetConnectivity
+    description: 'Provides the overall system''s network state'
+    query: 'SELECT * from connectivity;'
     type: data
-  - name: GetDiskInfo
-    description: "Retrieve basic information about the physical disks of a system"
-    query: "SELECT * from disk_info;"
+  -
+    name: GetDiskInfo
+    description: 'Retrieve basic information about the physical disks of a system'
+    query: 'SELECT * from disk_info;'
     type: data
-  - name: ListPatches
-    description: "List all patches"
-    query: "SELECT * from patches;"
+  -
+    name: ListPatches
+    description: 'List all patches'
+    query: 'SELECT * from patches;'
     type: data
-  - name: SecurebootStatus
-    description: "List secureboot (UEFI) status"
-    query: "SELECT * from secureboot;"
+  -
+    name: SecurebootStatus
+    description: 'List secureboot (UEFI) status'
+    query: 'SELECT * from secureboot;'
     type: data
-  - name: GetFilesInRoot
-    description: "List Files in RootDirectory"
-    query: "select * from file where directory='c:\\';"
+  -
+    name: ServicesListening
+    description: 'List services with pid with an open socket listening for incoming connections'
+    query: 'SELECT DISTINCT process.name, listening.port, process.pid FROM processes AS process JOIN listening_ports AS listening ON process.pid = listening.pid WHERE listening.address = \"0.0.0.0\";'
     type: data
