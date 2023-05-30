@@ -1,36 +1,39 @@
 # QUERY FOR INFORMATION ON THE ENDPOINT USING OSQUERY
 # This script queries data from an endpoint using osquery by using querypacks downloaded 
-# from a Github repo and sends the output to Skylight 
+# from a Github repo and sends the output to Skylight using a direct upload 
 #
 # AUTHOR  : Andreas Baeumer (andreasb@sentinelone.com)
-# VERSION : 1.2 
+# VERSION : 1.4 
 # USAGE   : 
-# execute-osquery-skylight.ps1 (optional parameters) 
+# execute-osquery-skylight-single.ps1 (optional parameters) 
 # 
 # Optional and mandatory parameters are defined below
 # 
 # ERROR CODES
-# 0   - no error occured
-# 1   - unspecified error occured
+#  0  - no error occured
+#  1  - unspecified error occured
 # 15  - could not locate the osqueryi.exe binary
-#
-# TODO 
-#
+# 25  - no valid Skylight token specified
 
+# TODO 
+# - optimize data upload
+# - select region from input parameter 
+# - verify Skylight token length
+# - verify query pack download before loop
+# - proxy
 
 Param(
-    [parameter(Mandatory = $False)]      # skylight write token
-    [String]$skylight_token="0g00729oG9viluG0C86eLFzJv/q3SQPo6mOgQE4gMfxQ-",
-    [parameter(Mandatory = $False)]      # name of the query pack as base64-encoded blob
-    [String]$pack_name="WindowsData",
+    [parameter(Mandatory = $True)]      # skylight write token
+    [String]$skylight_token="",
+    [Parameter(Mandatory=$False)]       # single query as base64 encoded string 
+    [String]$q="",
     [parameter(Mandatory = $False)]     # skylight region eu|us 
     [String]$skylight_region="eu",
-    [parameter(Mandatory = $False)]     # URL to download the query pack as base64-encoded blob
-    [String]$pack_url="https://raw.githubusercontent.com/s1baeumer/remoteops-datacollection/main/query-packs/base64/",
     [Parameter(Mandatory=$False)]       # path where osqueryi.exe is stored
     [String]$StorageLocation="C:\ProgramData\SentinelOne\osqueryi.exe",
     [Parameter(Mandatory=$False)]       # Enable/Disable debug logging
-    [Boolean]$DebugLogging=$False
+    [Boolean]$DebugLogging=$True
+
 )
 
 
@@ -243,7 +246,6 @@ New-Module -Name 'LogToDataSet' -ScriptBlock {
                 }  
             } 
             catch {
-                Write-Host "nix gedd $($Error) "
                 Write-Error "Error Sending To DataSet - $($Error)"
             }
         }        
@@ -268,8 +270,6 @@ function Logging($msg) {
     }
 }
 
-## help functions 
-
 # FINDING AGENT ID 
 function getagentid{
     $installpath = dir -Path "C:\Program Files\SentinelOne" -Filter SentinelCtl.exe -Recurse
@@ -278,7 +278,7 @@ function getagentid{
 
     try {
         $agent_uuid = &"$sentinelctl" agent_id
-        Logging "Found agent id '$agent_uuid'"
+        Logging "AgentUU '$agent_uuid'"
         return $agent_uuid
     } catch {
         Logging "could not retrieve agent uuid"
@@ -325,9 +325,6 @@ function runfunc() {
     Logging "AgentName: $agent_name"
     $agent_uuid = getagentid
 
-    $purl = "$pack_url$pack_name.b64"
-    Logging "Building pack url: $purl"
-
     # INSTANTIATE SkylightLogger
     $dataset = Get-DatasetLogger($skylight_token) 
     $dataset.SetServerHost("RemoteOps-osquery")
@@ -335,50 +332,28 @@ function runfunc() {
     $dataset.AddSessionAttribute("agent.uuid", $agent_uuid)
 
 
-    # QUERY FOR PACK FROM QUERY PACK URL
-    Logging "START DOWNLOAD QUERYPACK"
-    Logging "FROM PACK URL: $purl"
-
     # Ensures that Invoke-WebRequest uses TLS 1.2
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    # SEND REQUEST TO DOWLOAD QUERYPACK
-    #TODO download blob from remote server
-    Logging "started download from $purl"
-    $query_pack_blob = Invoke-WebRequest -Uri $purl -UseBasicParsing
-    #Logging $query_pack_blob
-    # CONVERT BLOB TO JSON
-    Logging "downloaded string - try to decode"
-    $q = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($query_pack_blob)) | ConvertFrom-Json
 
-    foreach($item in $q.queries) {
-        # RUNNING SINGLE QUERY 
-        $output = ExecuteOsquery ([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($item.query)))
-        if ($output -ne $False) {
-            # SPLITTING RESULT BY LINEBREAK AND FILL IN ARRAY
-            $x = $output -replace "`n",", " -replace "`r",", " | ConvertFrom-Json
+
+    # RUNNING SINGLE QUERY 
+    $output = ExecuteOsquery ($q)
+    if ($output -ne $False) {
+        # SPLITTING RESULT BY LINEBREAK AND FILL IN ARRAY
+        $x = $output -replace "`n",", " -replace "`r",", " | ConvertFrom-Json
  
-            # LOOPING THROUGH OUTPUT ARRAY AND ADD CONTENT TO ARRAY
-            foreach ($r in $x) {
-                $element = New-Object DatasetEvent
-                $element.ts = $([DateTimeOffset]::Now.ToUnixTimeMilliseconds())*1000000 
-                $element.attrs.Add("osquery.name", $item.name)
-                $element.attrs.Add("osquery.description", $item.description)
-                $element.attrs.Add("osquery.type", $item.type)
-                $element.attrs.Add("osquery.query", $item.query)
-                $r.PSObject.Properties | ForEach-Object {
-                    try {
-                        $element.attrs.Add($_.name,$_.value)
-                    } catch {
-                        Logging "Kölsch gefunden? $($Error)"
-                        exit(1)
-                    }
-                }
-                $dataset.AddEventObject($element)
-                $dataset.FlushEvents()  
+        # LOOPING THROUGH OUTPUT ARRAY AND ADD CONTENT TO DATASET/SKYLIGHT ARRAY
+        foreach ($r in $x) {
+            $element = New-Object DatasetEvent
+            $element.ts = $([DateTimeOffset]::Now.ToUnixTimeMilliseconds())*1000000 
+            $element.attrs.Add("osquery.query", $q)
+            $r.PSObject.Properties | ForEach-Object {
+                    $element.attrs.Add($_.name,$_.value)
             }
+            $dataset.AddEventObject($element)
+            $dataset.FlushEvents()  
         }
     }
-
     Logging "========================================================================"
     Logging "Finished script"
     Logging "========================================================================"
