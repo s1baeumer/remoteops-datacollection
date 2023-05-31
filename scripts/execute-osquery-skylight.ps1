@@ -290,7 +290,7 @@ function getagentid{
 # EXECUTE OSQUERY
 function ExecuteOsquery($base64_sql) {
     $SQL = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($base64_sql))
-    $q = "`"$StorageLocation`" --json `'$SQL`'"
+    $q = "`"$StorageLocation`" --json `"$SQL`""
     try {
         $output = Invoke-Expression "& $q"
         Logging $q
