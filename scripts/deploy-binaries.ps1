@@ -2,6 +2,7 @@
 # This script allows to download the binaries from a Github Repo
 #
 # AUTHOR: Andreas Baeumer (andreasb@sentinelone.com)
+# VERSION : 1.5 
 # USAGE
 # deploy-binaries.ps1 (optional parameters) 
 # 
@@ -14,10 +15,10 @@
 # 6   - directory to store the packages could not be deleted
 #
 # TODO 
+# - Logfile Pfad check and create if not exists
 # LOGGING TO XDR
 # CONNECTIVITY CHECK / PROXY
-# SET FOLDER ACL
-# LocalAdmin DomainUser
+# SET FOLDER ACL DomainIRUser
 
 
 param (

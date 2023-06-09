@@ -3,7 +3,7 @@
 # from a Github repo and sends the output to Skylight 
 #
 # AUTHOR  : Andreas Baeumer (andreasb@sentinelone.com)
-# VERSION : 1.2 
+# VERSION : 1.6 
 # USAGE   : 
 # execute-osquery-skylight.ps1 (optional parameters) 
 # 
@@ -15,7 +15,12 @@
 # 15  - could not locate the osqueryi.exe binary
 #
 # TODO 
-#
+# - Logfile Pfad check and create if not exists
+# - optimize data upload
+# - select region from input parameter 
+# - verify Skylight token length
+# - verify query pack download before loop
+# - proxy
 
 
 Param(
@@ -262,9 +267,13 @@ New-Module -Name 'LogToDataSet' -ScriptBlock {
 # LOGGING 
 function Logging($msg) {
     if ($DebugLogging -eq $True) {
+        $logpath = "C:\Temp"
+        If(!(Test-Path -PathType container $logpath)) {
+            New-Item -ItemType Directory -Path $logpath
+        }       
         $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
         $LogMessage = "$stamp $msg"
-        Add-content  "C:\Temp\execute-osquery-skylight.txt" -value $LogMessage
+        Add-content  "$logpath\execute-osquery-skylight.txt" -value $LogMessage
     }
 }
 
@@ -277,8 +286,9 @@ function getagentid{
     $sentinelctl = $installpath.FullName
 
     try {
-        $agent_uuid = &"$sentinelctl" agent_id
-        Logging "Found agent id '$agent_uuid'"
+        $a = "`"$sentinelctl`" agent_id"
+        $agent_uuid = Invoke-Expression "& $a"
+        Logging "AgentUUID: '$agent_uuid'"
         return $agent_uuid
     } catch {
         Logging "could not retrieve agent uuid"

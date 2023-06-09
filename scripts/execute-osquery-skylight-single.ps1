@@ -1,9 +1,10 @@
 # QUERY FOR INFORMATION ON THE ENDPOINT USING OSQUERY
-# This script queries data from an endpoint using osquery by using querypacks downloaded 
-# from a Github repo and sends the output to Skylight using a direct upload 
+# This script queries data from an endpoint using osquery by adding a single 
+# query to the command as a base64-encoded (no need to escape any special character)
+# parameter and sends the output to Skylight using a direct upload 
 #
 # AUTHOR  : Andreas Baeumer (andreasb@sentinelone.com)
-# VERSION : 1.4 
+# VERSION : 1.6 
 # USAGE   : 
 # execute-osquery-skylight-single.ps1 (optional parameters) 
 # 
@@ -12,21 +13,24 @@
 # ERROR CODES
 #  0  - no error occured
 #  1  - unspecified error occured
+# 14  - powershell version not matching the minimum version
 # 15  - could not locate the osqueryi.exe binary
 # 25  - no valid Skylight token specified
 
 # TODO 
-# - optimize data upload
-# - select region from input parameter 
+# - select region from input parameter to allow script to run in various regions
 # - verify Skylight token length
-# - verify query pack download before loop
-# - proxy
+# - get proxy settings from agent/system and use it for upload
+# - idea: offload dataset upload library to deploy-binaries and import it from there
+
 
 Param(
     [parameter(Mandatory = $True)]      # skylight write token
     [String]$skylight_token="",
-    [Parameter(Mandatory=$False)]       # single query as base64 encoded string 
+    [Parameter(Mandatory=$True)]        # single query as base64 encoded string 
     [String]$q="",
+    [Parameter(Mandatory=$False)]       # tag for query name
+    [String]$q_name="",
     [parameter(Mandatory = $False)]     # skylight region eu|us 
     [String]$skylight_region="eu",
     [Parameter(Mandatory=$False)]       # path where osqueryi.exe is stored
@@ -250,7 +254,6 @@ New-Module -Name 'LogToDataSet' -ScriptBlock {
             }
         }        
     } 
-
     
     function Get-DataSetLogger($token) {        
         $log2dataset.SetToken($token)
@@ -264,9 +267,13 @@ New-Module -Name 'LogToDataSet' -ScriptBlock {
 # LOGGING 
 function Logging($msg) {
     if ($DebugLogging -eq $True) {
+        $logpath = "C:\Temp"
+        If(!(Test-Path -PathType container $logpath)) {
+            New-Item -ItemType Directory -Path $logpath
+        }       
         $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
         $LogMessage = "$stamp $msg"
-        Add-content  "C:\Temp\execute-osquery-skylight.txt" -value $LogMessage
+        Add-content  "$logpath\execute-osquery-skylight.txt" -value $LogMessage
     }
 }
 
@@ -277,8 +284,9 @@ function getagentid{
     $sentinelctl = $installpath.FullName
 
     try {
-        $agent_uuid = &"$sentinelctl" agent_id
-        Logging "AgentUUID '$agent_uuid'"
+        $a = "`"$sentinelctl`" agent_id"
+        $agent_uuid = Invoke-Expression "& $a"
+        Logging "AgentUUID: '$agent_uuid'"
         return $agent_uuid
     } catch {
         Logging "could not retrieve agent uuid"
@@ -304,13 +312,6 @@ function ExecuteOsquery($base64_sql) {
 }
 
 
-# CHECKING IF OSQUERY EXISTS ON THE ENDPOINT
-if(Test-Path $StorageLocation) {
-    Logging "osquery binary is found"  
-} else {
-    Logging "Could not find osquery binary in '$StorageLocation'"
-    exit(15)
-}
 
 #### START CODE ####
 function runfunc() {
@@ -318,6 +319,28 @@ function runfunc() {
     Logging "Starting Script"
     Logging "========================================================================"
     Logging ""
+    # CHECKING IF POWERSHELL VERSION IS MINIMUM 3
+    $psv = $host.Version.Major
+    if ($psv -ge 3) {
+        Logging "Powershell version is matching the requirements"
+        Logging "Version found: $psv"
+    } else {
+        Logging "Powershell version is too old to run the script"
+        exit(14)
+    }
+    
+    # CHECKING IF OSQUERY EXISTS ON THE ENDPOINT
+    if(Test-Path $StorageLocation) {
+        Logging "osquery binary is found"  
+    } else {
+        Logging "Could not find osquery binary in '$StorageLocation'"
+        exit(15)
+    }
+
+
+
+
+    Logging "========================================================================"
     Logging "COLLECTING HOSTINFO"
 
     ## COLLECTING HOSTNAME AND AGENT ID
@@ -335,24 +358,25 @@ function runfunc() {
     # Ensures that Invoke-WebRequest uses TLS 1.2
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-
     # RUNNING SINGLE QUERY 
     $output = ExecuteOsquery ($q)
     if ($output -ne $False) {
+        logging "Received data from osquery - start to upload data to Skylight"
         # SPLITTING RESULT BY LINEBREAK AND FILL IN ARRAY
         $x = $output -replace "`n",", " -replace "`r",", " | ConvertFrom-Json
- 
+        logging $x.Count" records recieved"
         # LOOPING THROUGH OUTPUT ARRAY AND ADD CONTENT TO DATASET/SKYLIGHT ARRAY
         foreach ($r in $x) {
+            logging "adding new event to queue"
             $element = New-Object DatasetEvent
             $element.ts = $([DateTimeOffset]::Now.ToUnixTimeMilliseconds())*1000000 
-            $element.attrs.Add("osquery.query", $q)
+            $element.attrs.Add("osquery.queryname", $q_name)
             $r.PSObject.Properties | ForEach-Object {
-                    $element.attrs.Add($_.name,$_.value)
+                $element.attrs.Add($_.name,$_.value)
             }
             $dataset.AddEventObject($element)
-            $dataset.FlushEvents()  
         }
+        $dataset.FlushEvents()  
     }
     Logging "========================================================================"
     Logging "Finished script"
