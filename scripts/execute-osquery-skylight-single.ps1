@@ -347,6 +347,8 @@ function runfunc() {
     $agent_name = (Get-CimInstance -ClassName Win32_ComputerSystem).Name
     Logging "AgentName: $agent_name"
     $agent_uuid = getagentid
+    $guid = [guid]::NewGuid().toString()
+    Logging "GUID: $guid"
 
     # INSTANTIATE SkylightLogger
     $dataset = Get-DatasetLogger($skylight_token) 
@@ -370,6 +372,7 @@ function runfunc() {
             logging "adding new event to queue"
             $element = New-Object DatasetEvent
             $element.ts = $([DateTimeOffset]::Now.ToUnixTimeMilliseconds())*1000000 
+            $element.attrs.Add("osquery.uuid", $guid)
             $element.attrs.Add("osquery.queryname", $q_name)
             $r.PSObject.Properties | ForEach-Object {
                 $element.attrs.Add($_.name,$_.value)

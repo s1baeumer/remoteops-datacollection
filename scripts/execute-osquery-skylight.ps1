@@ -300,7 +300,7 @@ function getagentid{
 # EXECUTE OSQUERY
 function ExecuteOsquery($base64_sql) {
     $SQL = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($base64_sql))
-    $q = "`"$StorageLocation`" --json `"$SQL`""
+    $q = "$StorageLocation --json `"$SQL`""
     try {
         $output = Invoke-Expression "& $q"
         Logging $q
@@ -337,7 +337,9 @@ function runfunc() {
 
     $purl = "$pack_url$pack_name.b64"
     Logging "Building pack url: $purl"
-
+    $guid = [guid]::NewGuid().toString()
+    Logging "GUID: $guid"
+    
     # INSTANTIATE SkylightLogger
     $dataset = Get-DatasetLogger($skylight_token) 
     $dataset.SetServerHost("RemoteOps-osquery")
@@ -371,10 +373,11 @@ function runfunc() {
             foreach ($r in $x) {
                 $element = New-Object DatasetEvent
                 $element.ts = $([DateTimeOffset]::Now.ToUnixTimeMilliseconds())*1000000 
+                $element.attrs.Add("osquery.uuid", $guid)
+                $element.attrs.Add("osquery.packname", $pack_name)
                 $element.attrs.Add("osquery.name", $item.name)
                 $element.attrs.Add("osquery.description", $item.description)
                 $element.attrs.Add("osquery.type", $item.type)
-                $element.attrs.Add("osquery.query", $item.query)
                 $r.PSObject.Properties | ForEach-Object {
                     try {
                         $element.attrs.Add($_.name,$_.value)
