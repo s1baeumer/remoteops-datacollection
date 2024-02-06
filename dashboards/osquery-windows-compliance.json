@@ -1,0 +1,34 @@
+{
+    "graphs" : [
+      {
+        "graphStyle": "line",
+        "plots": [
+          {
+              "color": "#fb000a",
+              "facet": "rate",
+              "filter": "osquery.type = 'violation' ",
+              "label": "Number of violations found"
+          }
+        ],
+        "title": "Violations",
+        "lineSmoothing": "smoothCurves"
+      },
+      {
+        "query": "osquery.type = 'violation' | let Violation=osquery.name | let Details=osquery.description | columns timestamp, endpoint.name, Violation, Details | limit 20 | sort -timestamp",
+        "title": "latest violations found",
+        "graphStyle": ""
+      },
+      {
+        "query": "osquery.type = 'violation' | group NumberOfViolations = count(osquery.type='violation') by endpoint.name | columns endpoint.name, NumberOfViolations | sort -NumberOfViolations",
+        "title": "Endpoints with highest amount of violations",
+        "graphStyle": ""
+      },
+      {
+        "query": "osquery.type = 'violation' | columns NumberOfViolations, osquery.name, osquery.description | group NumberOfViolations = count(osquery.name) by osquery.name| sort -NumberOfViolations",
+        "title": "Violations by type",
+        "graphStyle": "donut",
+        "maxPieSlices": 10
+      }
+    ],
+    "description" : "Results from osquery with WindowsCompliance query pack"
+  }

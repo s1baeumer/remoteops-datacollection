@@ -57,3 +57,8 @@ queries:
     description: 'List services with pid with an open socket listening for incoming connections'
     query: 'SELECT DISTINCT process.name, listening.port, process.pid FROM processes AS process JOIN listening_ports AS listening ON process.pid = listening.pid WHERE listening.address = \"0.0.0.0\";'
     type: data
+  -
+    name: GetScheduled Tasks
+    description: 'List scheduled tasks'
+    query: 'SELECT * from scheduled_tasks;'
+    type: data
